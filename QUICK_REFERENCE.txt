@@ -1,0 +1,304 @@
+
+╔════════════════════════════════════════════════════════════════════╗
+║              GAIT ANALYSIS PIPELINE - QUICK REFERENCE              ║
+║                        Bio-Sole Analysis                           ║
+╚════════════════════════════════════════════════════════════════════╝
+
+PIPELINE AT A GLANCE
+════════════════════════════════════════════════════════════════════
+
+Stage 1: Load Data
+   ├─ Input: .pkl files (sensor data + heel strike labels)
+   └─ Output: Organized DataFrame + timestamps
+
+Stage 2: Window & Normalize
+   ├─ Input: Continuous time series
+   ├─ Process: 500-sample sliding windows, min-max scaling [-1,1]
+   └─ Output: x_combined (n_windows, 500, 14)
+
+Stage 3: Gait Classification ← MODEL 1
+   ├─ Input: Normalized windows
+   ├─ Predict: Gait vs Non-gait (binary)
+   ├─ Metrics: Accuracy, Precision, Recall, F1, ROC AUC
+   └─ Output: Filtered gait-only samples
+
+Stage 4: Heel Strike Detection ← MODEL 2
+   ├─ Input: Gait-classified windows
+   ├─ Predict: HS probability per timestep, per foot
+   ├─ Method: Peak detection (height=0.4, distance=10 samples)
+   └─ Output: Variable-length gait cycles + timestamps
+
+Stage 5: Phase Extraction ← MODEL 3
+   ├─ Input: Variable-length cycles
+   ├─ Process: Interpolate to 101 points (normalize timing)
+   ├─ Predict: Gait phase timings (left strike, right off, left off)
+   └─ Output: Phase indices in original timescale
+
+Stage 6: Calculate Gait Parameters
+   ├─ Input: Phase timing events
+   ├─ Calculate: Cadence, stride time, stance/swing times, etc.
+   ├─ Compute: Percentages and symmetry metrics
+   └─ Output: data_final DataFrame (n_cycles × 14 parameters)
+
+
+SENSOR CHANNELS (14 total)
+════════════════════════════════════════════════════════════════════
+
+LEFT FOOT (7 channels):
+  [0] leftAccelerationX_g_      [IMU] X-axis acceleration (gravity units)
+  [1] leftAccelerationY_g_      [IMU] Y-axis acceleration
+  [2] leftAccelerationZ_g_      [IMU] Z-axis acceleration (vertical)
+  [3] leftAngularX_dps_         [IMU] X-axis angular velocity (deg/s)
+  [4] leftAngularY_dps_         [IMU] Y-axis angular velocity
+  [5] leftAngularZ_dps_         [IMU] Z-axis angular velocity
+  [6] leftTotalForce_N_         [PRESSURE] Total vertical force (Newtons)
+
+RIGHT FOOT (7 channels):
+  [7]  rightAccelerationX_g_    [IMU] X-axis acceleration
+  [8]  rightAccelerationY_g_    [IMU] Y-axis acceleration
+  [9]  rightAccelerationZ_g_    [IMU] Z-axis acceleration
+  [10] rightAngularX_dps_       [IMU] X-axis angular velocity
+  [11] rightAngularY_dps_       [IMU] Y-axis angular velocity
+  [12] rightAngularZ_dps_       [IMU] Z-axis angular velocity
+  [13] rightTotalForce_N_       [PRESSURE] Total vertical force
+
+
+MODEL CHECKPOINTS
+════════════════════════════════════════════════════════════════════
+
+model_files[2]  ← Heel Strike Detection (Stage 4)
+model_files[4]  ← Gait Phase Extraction (Stage 5)
+model_files[5]  ← Gait Classification (Stage 3)
+
+
+KEY PARAMETERS IN CODE
+════════════════════════════════════════════════════════════════════
+
+fn = 100                    Window frequency (Hz)
+window_size = 5 * fn       Window duration = 5 seconds (500 samples)
+stride = fn                Window stride = 1 second
+interp_length = 101        Interpolation target (normalized cycle)
+height = 0.4               Min HS probability for peak detection
+distance = 10              Min samples between HS peaks (100 ms)
+threshold = 0.5            Classification threshold
+
+
+GAIT PARAMETERS OUTPUT
+════════════════════════════════════════════════════════════════════
+
+TIMING (seconds):
+  Stride_Time_s           One complete gait cycle (right HS to right HS)
+  Step_Time_s             One step (right HS to left HS)
+  Stance_Time_s           Foot in contact
+  Swing_Time_s            Foot in air
+  Single_Support_s        One foot down, other in swing
+  Total_Double_Support_s  Both feet down (early stance + late stance)
+
+RATE (steps/minute):
+  Cadence_steps_per_min   Steps per minute (60 / Step_Time)
+
+PHASE PERCENTAGES:
+  Stance_Percent          Stance as % of stride (normal ~60%)
+  Swing_Percent           Swing as % of stride (normal ~40%)
+
+EVENTS (Timestamps):
+  R_HS_S                  Right heel strike start
+  L_FF                    Left foot off
+  L_HS                    Left heel strike
+  R_FF                    Right foot off
+  R_HS_E                  Right heel strike end (cycle complete)
+
+
+TYPICAL VALUES (Healthy Gait)
+════════════════════════════════════════════════════════════════════
+
+Cadence:            100-130 steps/min
+Stride Time:        0.9-1.2 seconds
+Step Time:          0.45-0.65 seconds
+Stance Time:        0.60-0.80 seconds (≈60% of stride)
+Swing Time:         0.30-0.50 seconds (≈40% of stride)
+Single Support:     0.30-0.40 seconds
+Double Support:     0.10-0.20 seconds
+Stance %:           60% ± 2%
+Swing %:            40% ± 2%
+
+
+PROGRESS TRACKING DURING EXECUTION
+════════════════════════════════════════════════════════════════════
+
+Console output shows:
+
+[STAGE 0] Loading libraries...
+✓ Google Drive mounted
+✓ Libraries loaded successfully
+
+[STAGE 1] Loading data and models...
+  → Found X model files
+  → Found X gait data files
+  → Found X non-gait data files
+  ✓ Data loaded
+  → Subject: Subj12, Samples: XXXXX
+✓ Stage 1 complete (XX.XXs)
+
+[STAGE 2] Windowing and preprocessing sensor data...
+  → Created XXXX windows from gait data
+  → Filtered to XXXX windows with ≥2 heel strikes
+  → Non-gait samples: XXXX
+  → Normalizing sensor data...
+✓ Stage 2 complete (XX.XXs)
+
+[STAGE 3] Classifying gait vs non-gait activity...
+  → Model loaded: model_name
+  Confusion Matrix: TN=X, FP=X, FN=X, TP=X
+  Accuracy:  0.XXXX
+  Precision: 0.XXXX
+  Recall:    0.XXXX
+  F1-Score:  0.XXXX
+  ROC AUC:   0.XXXX
+  → XXXX samples classified as gait
+✓ Stage 3 complete (XX.XXs)
+
+[STAGE 4] Detecting heel strike events...
+  → Model loaded: model_name
+  → Predictions shape: (XXXX, 500, 2)
+  → Detected ≥1 HS events in XXXX right samples
+  → Detected ≥1 HS events in XXXX left samples
+  → Extracted XXXX right foot cycles
+  → Extracted XXXX left foot cycles
+✓ Stage 4 complete (XX.XXs)
+
+[STAGE 5] Extracting gait phases (right foot reference)...
+  → Interpolating to 101 points per cycle
+  → Valid cycles after interpolation: XXXX
+  → Model loaded: model_name
+  → Phase predictions shape: (XXXX, 101, 3)
+✓ Stage 5 complete (XX.XXs)
+
+[STAGE 6] Computing gait temporal parameters...
+  → Computed XXXX gait cycles
+
+  Summary Statistics:
+    Cadence:     XX.XX ± X.XX steps/min
+    Stride Time: X.XXX ± X.XXX s
+    Stance:      XX.X%
+    Swing:       XX.X%
+
+✓ Stage 6 complete (XX.XXs)
+
+==================================================
+PIPELINE COMPLETE
+==================================================
+Final output: XXXX gait cycles analyzed
+
+
+COMMON ADJUSTMENTS
+════════════════════════════════════════════════════════════════════
+
+Want more gait cycles?
+  • Lower height parameter in find_peaks() (e.g., 0.3 or 0.2)
+  • Lower distance parameter (e.g., 5 samples = 50 ms)
+  • Check if non-gait activity is being misclassified
+
+Want stricter HS detection?
+  • Increase height parameter (e.g., 0.5 or 0.6)
+  • Increase distance parameter (e.g., 15 or 20 samples)
+  • Manually inspect predictions
+
+Change classification threshold?
+  • Current: threshold = 0.5
+  • More sensitive: 0.3-0.4 (more gait detected)
+  • More specific: 0.6-0.7 (fewer false positives)
+
+Process different subject?
+  • Change: subject_id = 'Subj12'
+  • To:     subject_id = 'SubjXX'
+
+
+PERFORMANCE EXPECTATIONS
+════════════════════════════════════════════════════════════════════
+
+Time per stage (typical run):
+  Stage 1: 5-10 seconds (data loading)
+  Stage 2: 10-20 seconds (windowing + normalization)
+  Stage 3: 30-60 seconds (model inference on all windows)
+  Stage 4: 30-60 seconds (model inference on gait samples)
+  Stage 5: 10-20 seconds (interpolation + model inference)
+  Stage 6: <1 second (parameter calculation)
+  ─────────────────────
+  TOTAL:  ~1-2.5 minutes (depending on data size)
+
+Memory usage:
+  Raw data: ~100 MB (10,000+ samples, 14 channels)
+  Intermediate arrays: ~200-300 MB
+  Total: ~500 MB (manageable on Colab)
+
+Typical output size:
+  data_final DataFrame: 100-1000 gait cycles per subject
+  CSV export: ~50-500 KB
+
+
+ACCESSING RESULTS
+════════════════════════════════════════════════════════════════════
+
+View first N cycles:
+  >>> data_final.head(10)
+
+Summary statistics:
+  >>> data_final.describe()
+
+Export to CSV:
+  >>> data_final.to_csv('gait_parameters.csv', index=False)
+
+Plot cadence over time:
+  >>> import matplotlib.pyplot as plt
+  >>> plt.plot(data_final['Cadence_steps_per_min'])
+  >>> plt.xlabel('Gait Cycle')
+  >>> plt.ylabel('Cadence (steps/min)')
+  >>> plt.show()
+
+Calculate variability:
+  >>> cadence_std = data_final['Cadence_steps_per_min'].std()
+  >>> stride_cv = (data_final['Stride_Time_s'].std() / 
+  ...              data_final['Stride_Time_s'].mean()) * 100
+  >>> print(f"Cadence variability: {cadence_std:.2f} steps/min")
+  >>> print(f"Stride time CV: {stride_cv:.2f}%")
+
+Filter for specific parameter ranges:
+  >>> slow_walking = data_final[data_final['Cadence_steps_per_min'] < 90]
+  >>> asymmetric_gait = data_final[
+  ...     (data_final['Step_Time_s'].std() > 0.1)
+  ... ]
+
+
+DEBUGGING CHECKLIST
+════════════════════════════════════════════════════════════════════
+
+□ Verify model files exist:
+  >>> print(model_files)  # Check all indices present
+
+□ Check data shapes at each stage:
+  >>> print(f"x_combined shape: {x_combined.shape}")
+  >>> print(f"y_combined shape: {y_combined.shape}")
+
+□ Verify normalization worked:
+  >>> print(f"Min: {x_combined.min()}, Max: {x_combined.max()}")
+  # Should be close to [-1, 1]
+
+□ Check classification metrics:
+  >>> print(f"Gait samples: {(y_pred_binary==1).sum()}")
+  >>> print(f"Non-gait samples: {(y_pred_binary==0).sum()}")
+
+□ Inspect HS detections:
+  >>> print(f"Right peaks: {[len(p) for p in right_peaks[:5]]}")
+  >>> print(f"Left peaks: {[len(p) for p in left_peaks[:5]]}")
+
+□ Verify final output:
+  >>> print(data_final.info())  # Check all columns present
+  >>> print(data_final.isnull().sum())  # Check for missing values
+  >>> print(data_final['Cadence_steps_per_min'].describe())  # Sanity check
+
+
+════════════════════════════════════════════════════════════════════
+For detailed explanations, see: PIPELINE_DOCUMENTATION.txt
+For implementation details, see: gait_analysis_refactored.py
+════════════════════════════════════════════════════════════════════

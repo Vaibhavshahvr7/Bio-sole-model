@@ -1,0 +1,482 @@
+
+╔═══════════════════════════════════════════════════════════════════╗
+║        GAIT ANALYSIS PIPELINE - COMPREHENSIVE GUIDE              ║
+║              Bio-Sole Pressure Insole Analysis                   ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+TABLE OF CONTENTS
+═════════════════════════════════════════════════════════════════════
+1. Pipeline Overview
+2. Stage-by-Stage Breakdown
+3. Data Flow Diagram
+4. ML Models Used
+5. Gait Parameters Explained
+6. Output Interpretation
+7. Troubleshooting Tips
+
+═════════════════════════════════════════════════════════════════════
+1. PIPELINE OVERVIEW
+═════════════════════════════════════════════════════════════════════
+
+Purpose:
+  Convert raw IMU + pressure sensor data into clinical gait parameters
+  suitable for:
+    • Elderly fall risk assessment
+    • Neurological disease monitoring (Parkinson's, Alzheimer's)
+    • Rehabilitation tracking
+    • Sports biomechanics analysis
+
+Input Data:
+  - IMU (Inertial Measurement Unit): 6-axis per foot
+    * Acceleration (X, Y, Z) in g (gravitational units)
+    * Angular velocity (X, Y, Z) in dps (degrees per second)
+  - Pressure Insole: Total vertical force (N) per foot
+  - Sampling: 100 Hz (10 ms per sample)
+
+Output:
+  - Temporal gait parameters (timing, cadence, symmetry)
+  - Gait phase percentages (stance, swing, double support)
+  - Per-stride analysis for trend detection
+
+
+═════════════════════════════════════════════════════════════════════
+2. STAGE-BY-STAGE BREAKDOWN
+═════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STAGE 0: IMPORTS & SETUP                                        │
+├─────────────────────────────────────────────────────────────────┤
+│ Purpose:  Load libraries, mount Google Drive                    │
+│ Time:     ~2-5 seconds                                          │
+│ Output:   Confirmation messages                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STAGE 1: DATA LOADING & PREPARATION                             │
+├─────────────────────────────────────────────────────────────────┤
+│ Purpose:  Load sensor data, organize into DataFrames            │
+│ Input:    .pkl files from Google Drive                          │
+│ Output:   data_gait_subject (n_samples × 14 sensors)           │
+│           y (heel strike indices)                               │
+│           timestamp_array (synchronized timestamps)             │
+│                                                                  │
+│ Key Variables:                                                   │
+│   • subject_id = 'Subj12' (which subject to analyze)           │
+│   • SENSOR_COLUMNS = 14 IMU/pressure sensor channels           │
+│   • num_samples = total timesteps in recording                  │
+│   • heel_strike_indices = ground truth HS events               │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STAGE 2: WINDOWING & PREPROCESSING                              │
+├─────────────────────────────────────────────────────────────────┤
+│ Purpose:  Convert continuous stream into fixed-length windows   │
+│ Method:   Sliding window (500 samples = 5 seconds @ 100 Hz)    │
+│ Stride:   100 samples (1 second)                               │
+│ Result:   Variable-length gait cycles organized into windows    │
+│ Filter:   Keep only windows with ≥2 heel strike events         │
+│                                                                  │
+│ Normalization (Min-Max scaling to [-1, 1]):                    │
+│   For each sample:                                              │
+│     X_norm = (X - X_min) / (X_max - X_min)                    │
+│     X_scaled = 2 * X_norm - 1                                  │
+│     (handles constant features by setting to 0)                 │
+│                                                                  │
+│ Output Shape:                                                    │
+│   x_combined: (n_windows, 500 timesteps, 14 sensors)          │
+│   y_combined: (n_windows,) binary labels [0=non-gait, 1=gait] │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STAGE 3: GAIT CLASSIFICATION (Model 1)                          │
+├─────────────────────────────────────────────────────────────────┤
+│ Purpose:  Filter real gait from non-gait activity              │
+│ Model:    Binary classifier (Keras/TensorFlow)                 │
+│ Input:    Normalized windows (500, 14)                         │
+│ Output:   Probability of gait [0, 1]                           │
+│ Threshold: 0.5 (adjust if needed)                              │
+│                                                                  │
+│ Metrics Computed:                                               │
+│   - Confusion Matrix (TP, TN, FP, FN)                         │
+│   - Accuracy, Precision, Recall, F1-score                      │
+│   - ROC AUC (handles class imbalance)                          │
+│                                                                  │
+│ Output:   x_gait_only - only predicted gait samples            │
+│           y_pred_binary - hard class labels (0/1)              │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STAGE 4: HEEL STRIKE DETECTION (Model 2)                        │
+├─────────────────────────────────────────────────────────────────┤
+│ Purpose:  Locate precise moments of foot contact               │
+│ Model:    Regression on timesteps (Keras/TensorFlow)           │
+│ Input:    Gait-classified windows (500, 14)                    │
+│ Output:   HS probability per timestep, per foot (500, 2)      │
+│           Channel 0 = Right foot, Channel 1 = Left foot        │
+│                                                                  │
+│ Peak Detection:                                                  │
+│   - find_peaks() identifies local maxima in HS predictions     │
+│   - height=0.4 (minimum probability threshold)                 │
+│   - distance=10 (minimum 100ms between peaks)                  │
+│                                                                  │
+│ Gait Cycle Extraction:                                          │
+│   Between consecutive HS events = one gait stride              │
+│   Extract raw data for each cycle                              │
+│                                                                  │
+│ Output:   right_cycles['data'] - variable-length cycles       │
+│           left_cycles['data'] - variable-length cycles         │
+│           Associated timestamps for each cycle                 │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STAGE 5: GAIT PHASE EXTRACTION (Model 3)                        │
+├─────────────────────────────────────────────────────────────────┤
+│ Purpose:  Standardize cycle length, extract phase timings      │
+│ Method:   Linear interpolation to 101 points                   │
+│           (maintains temporal relationships)                    │
+│                                                                  │
+│ Interpolation Process:                                          │
+│   1. Map original indices to [0, 1]                            │
+│   2. Generate 101 equally-spaced target points                 │
+│   3. Linear interpolation per feature                          │
+│   Result: All cycles normalized to ~1 second at 100 Hz        │
+│                                                                  │
+│ Model:    Sequence model predicting gait phases                │
+│ Input:    Interpolated cycles (101, 14)                        │
+│ Output:   Phase probabilities (101, 3)                         │
+│           Channel 0 = Left foot strike timing                  │
+│           Channel 1 = Right foot off timing                    │
+│           Channel 2 = Left foot off timing                     │
+│                                                                  │
+│ Phase Timing Extraction:                                        │
+│   argmax() → index of peak probability per phase               │
+│   Scale back to original cycle length                          │
+│                                                                  │
+│ Output:   left_fs_orig, right_ff_orig, left_ff_orig          │
+│           (indices in original timescale)                       │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STAGE 6: TEMPORAL PARAMETER CALCULATION                         │
+├─────────────────────────────────────────────────────────────────┤
+│ Purpose:  Extract clinical gait parameters from phase timings  │
+│ Method:   Calculate time intervals between phase events        │
+│                                                                  │
+│ Key Events (from Model 3):                                      │
+│   R_HS_S: Right Heel Strike Start                              │
+│   L_FF:   Left Foot Off (end of left stance)                   │
+│   L_HS:   Left Heel Strike (opposite foot contact)             │
+│   R_FF:   Right Foot Off (end of right stance)                │
+│   R_HS_E: Right Heel Strike End (start of next R_HS_S)        │
+│                                                                  │
+│ Calculated Parameters:                                          │
+│   Stride Time: R_HS_S to R_HS_E (full gait cycle)             │
+│   Stance Time: R_HS_S to R_FF (foot in contact)               │
+│   Swing Time: R_FF to R_HS_E (foot in air)                    │
+│   Step Time: R_HS_S to L_HS (time to opposite HS)             │
+│   Cadence: 60 / Step_Time (steps per minute)                   │
+│   Double Support: (R_HS_S to L_FF) + (L_HS to R_FF)           │
+│   Single Support: L_FF to L_HS (contralateral foot in air)    │
+│   Stance %: (Stance Time / Stride Time) × 100                  │
+│   Swing %: (Swing Time / Stride Time) × 100                    │
+│                                                                  │
+│ Output:   data_final (DataFrame)                               │
+│           n_cycles × 14 parameters                             │
+└─────────────────────────────────────────────────────────────────┘
+
+
+═════════════════════════════════════════════════════════════════════
+3. DATA FLOW DIAGRAM
+═════════════════════════════════════════════════════════════════════
+
+Raw Sensor Data (continuous stream)
+    ↓
+    └──→ [Stage 1] Load & Organize
+         └──→ Windowing (Stage 2)
+             ├──→ 500-sample windows
+             ├──→ Min-Max normalization
+             └──→ x_combined (n_windows, 500, 14)
+                 ↓
+                 └──→ [Stage 3] Gait Classifier (Model 1)
+                     ├──→ Predicts: Gait vs Non-gait
+                     └──→ Filter: x_gait_only
+                         ↓
+                         └──→ [Stage 4] HS Detector (Model 2)
+                             ├──→ Predicts: HS probability per timestep
+                             ├──→ Peak detection → Find HS events
+                             └──→ Extract variable-length gait cycles
+                                 ↓
+                                 └──→ [Stage 5] Phase Extractor (Model 3)
+                                     ├──→ Interpolate to 101 points
+                                     ├──→ Predict gait phase timings
+                                     └──→ Extract phase indices
+                                         ↓
+                                         └──→ [Stage 6] Parameter Calc
+                                             ├──→ Calculate intervals
+                                             ├──→ Derive cadence, etc.
+                                             └──→ data_final (DataFrame)
+
+                                             OUTPUT: Gait Parameters
+                                             • Cadence (steps/min)
+                                             • Stride/Step/Stance times
+                                             • Swing time
+                                             • Double/Single support
+                                             • Phase percentages
+
+
+═════════════════════════════════════════════════════════════════════
+4. ML MODELS USED
+═════════════════════════════════════════════════════════════════════
+
+Model 1 - Gait Classification (model_files[5])
+  Purpose:    Binary classification (gait or not)
+  Input:      (batch_size, 500, 14) - normalized sensor windows
+  Output:     (batch_size, 1) - probability [0, 1]
+  Architecture: Likely LSTM/CNN for temporal pattern recognition
+  Threshold:   0.5 (predictions ≥ 0.5 = gait)
+  Used in:     Stage 3
+
+Model 2 - Heel Strike Detection (model_files[2])
+  Purpose:    Regress HS event timing per timestep
+  Input:      (batch_size, 500, 14) - normalized windows
+  Output:     (batch_size, 500, 2) - HS prob for right/left foot
+  Values:     [0, 1] per timestep (higher = more likely HS)
+  Peak finding: scipy.signal.find_peaks() to locate HS events
+  Used in:     Stage 4
+
+Model 3 - Gait Phase Extraction (model_files[4])
+  Purpose:    Predict gait phase timings within normalized cycle
+  Input:      (batch_size, 101, 14) - interpolated cycles
+  Output:     (batch_size, 101, 3) - phase probs per timestep
+             Channels: [left_strike, right_off, left_off]
+  argmax():   Find peak probability = phase timing
+  Used in:     Stage 5
+
+
+═════════════════════════════════════════════════════════════════════
+5. GAIT PARAMETERS EXPLAINED (Clinical Significance)
+═════════════════════════════════════════════════════════════════════
+
+TEMPORAL PARAMETERS
+───────────────────────────────────────────────────────────────────
+
+Cadence (steps/minute) [normal: 100-130]
+  • Number of steps per minute
+  • Lower cadence → slower walking (caution sign in elderly)
+  • Higher cadence → rushed, possibly unstable gait
+  • Calculated: 60 / Step_Time
+
+Stride Time (seconds) [normal: 0.9-1.2s]
+  • Duration from one right HS to next right HS
+  • Measures gait cycle duration
+  • Longer → slower walking
+
+Step Time (seconds) [normal: 0.45-0.65s]
+  • Duration from one foot HS to opposite foot HS
+  • Related to step length via walking speed
+  • Left and right step times should be similar (symmetry)
+
+Stance Time (seconds) [normal: 0.60-0.80s]
+  • Duration foot in contact with ground
+  • ~60% of stride in healthy gait
+  • Decreased in Parkinsonian gait, increased in cautious gait
+
+Swing Time (seconds) [normal: 0.30-0.50s]
+  • Duration foot in air (non-contact phase)
+  • ~40% of stride in healthy gait
+  • Difficult to swing in Parkinson's (reduced swing)
+
+PHASE PARAMETERS
+───────────────────────────────────────────────────────────────────
+
+Double Support Time (seconds) [normal: 0.10-0.20s]
+  • Both feet in contact with ground simultaneously
+  • Occurs at beginning and end of each stride
+  • Increased in elderly (safety), absent in running
+  • Formula: (R_HS_S to L_FF) + (L_HS to R_FF)
+
+Single Support Time (seconds) [normal: 0.30-0.40s]
+  • One foot in contact, other in swing
+  • Should be ~40% of stride time
+  • Decreased single support → balance concerns
+  • Formula: L_FF to L_HS (while right foot is stance)
+
+Stance % [normal: 60%]
+  • Percentage of stride in stance phase
+  • Calculated: (Stance Time / Stride Time) × 100
+
+Swing % [normal: 40%]
+  • Percentage of stride in swing phase
+  • Should complement Stance %
+  • Calculated: (Swing Time / Stride Time) × 100
+
+CLINICAL INTERPRETATION
+───────────────────────────────────────────────────────────────────
+
+Healthy Gait Profile:
+  ✓ Cadence: 100-130 steps/min
+  ✓ Stride Time: 0.9-1.2 s
+  ✓ Stance: ~60% of cycle
+  ✓ Swing: ~40% of cycle
+  ✓ Symmetry: Left/right times nearly equal
+
+Parkinson's Disease:
+  ✗ Low cadence (shuffling)
+  ✗ Short steps (reduced swing)
+  ✗ Increased stance time
+  ✗ Reduced double support time
+  ✗ Gait freezing episodes
+
+Elderly/Fall Risk:
+  ✗ Increased double support (seeking stability)
+  ✗ Reduced stride length
+  ✗ Variable cadence
+  ✗ Asymmetry (left/right imbalance)
+
+Neurological Disorders:
+  ✗ Abnormal timing patterns
+  ✗ Increased variability cycle-to-cycle
+  ✗ Loss of symmetry
+
+
+═════════════════════════════════════════════════════════════════════
+6. OUTPUT INTERPRETATION
+═════════════════════════════════════════════════════════════════════
+
+data_final DataFrame Columns
+───────────────────────────────────────────────────────────────────
+
+Timestamp Columns (Pandas Timestamp objects):
+  • R_HS_S: When right foot strikes (start of right stance)
+  • L_FF: When left foot leaves ground
+  • L_HS: When left foot strikes
+  • R_FF: When right foot leaves ground (end of right stance)
+  • R_HS_E: When right foot strikes again (end of cycle)
+
+Temporal Columns (seconds):
+  • Cadence_steps_per_min: Steps per minute
+  • Stride_Time_s: One complete gait cycle
+  • Stance_Time_s: Foot in contact
+  • Swing_Time_s: Foot in air
+  • Step_Time_s: One step duration
+  • Total_Double_Support_s: Both feet down
+  • Single_Support_s: One foot down, other in swing
+  • Stance_Percent: Stance as % of cycle
+  • Swing_Percent: Swing as % of cycle
+
+Example Output:
+───────────────────────────────────────────────────────────────────
+
+                Cadence  Stride_Time  Stance_Percent  Swing_Percent
+               103.45 st   1.12 s         62.1%           37.9%
+               105.23 st   1.08 s         61.2%           38.8%
+               102.67 st   1.14 s         63.5%           36.5%
+               ...
+
+Summary Statistics Output:
+───────────────────────────────────────────────────────────────────
+
+Cadence:     103.5 ± 2.3 steps/min
+Stride Time: 1.11 ± 0.05 s
+Stance:      62.0% ± 1.5%
+Swing:       38.0% ± 1.5%
+
+Interpretation:
+  • Mean cadence within normal range
+  • Low variability (healthy, consistent)
+  • Stance/swing split suggests healthy gait
+
+
+═════════════════════════════════════════════════════════════════════
+7. TROUBLESHOOTING TIPS
+═════════════════════════════════════════════════════════════════════
+
+Issue: Too few gait cycles extracted
+─────────────────────────────────────────────────────────────────────
+Possible Causes:
+  • Heel strike detection model threshold too high
+  • Recording contains mostly non-gait activity
+  • Peak detection distance parameter too large
+
+Solutions:
+  • Reduce height parameter in find_peaks() [currently 0.4]
+  • Reduce distance parameter [currently 10 samples = 100ms]
+  • Check Model 2 predictions manually
+  • Verify input data quality
+
+Issue: Unusual gait parameter values
+─────────────────────────────────────────────────────────────────────
+Possible Causes:
+  • Phase extraction model (Model 3) returning incorrect peaks
+  • Interpolation causing artifacts
+  • Normalization removing important signal
+
+Solutions:
+  • Check y_pred_phases shape and values
+  • Visualize predicted phases vs raw data
+  • Test interpolation on sample cycle
+  • Verify min_max_scaling doesn't oversmooth data
+
+Issue: Asymmetric left/right parameters
+─────────────────────────────────────────────────────────────────────
+Possible Causes:
+  • Sensor calibration issue (left vs right insole)
+  • Subject has actual gait asymmetry (pathological or natural)
+  • Model trained with bias
+
+Solutions:
+  • Check sensor data for systematic differences
+  • Examine subject for injury/pathology
+  • Compare with ground truth (motion capture)
+  • Retrain models if needed
+
+Issue: Pipeline crashes at Stage X
+─────────────────────────────────────────────────────────────────────
+Common Errors:
+
+FileNotFoundError:
+  → Models not found at expected path
+  → Verify model_files array indexing
+
+MemoryError:
+  → Dataset too large
+  → Process in smaller chunks
+  → Reduce window size or number of samples
+
+Shape mismatch in model.predict():
+  → Input dimensions wrong
+  → Check normalization preserves shape
+  → Verify interpolation output shape
+
+Solutions:
+  • Add try/except blocks around model.predict()
+  • Print shapes at each stage
+  • Monitor memory usage
+  • Process data in batches
+
+
+═════════════════════════════════════════════════════════════════════
+NEXT STEPS
+═════════════════════════════════════════════════════════════════════
+
+1. Visualization:
+   • Plot gait parameters vs time
+   • Heatmaps of sensor data per gait phase
+   • Distribution of parameters across subjects
+
+2. Validation:
+   • Compare with ground truth (motion capture, force plates)
+   • Calculate per-subject errors
+   • Test on different populations
+
+3. Clinical Integration:
+   • Set thresholds for fall risk
+   • Track parameter changes over time
+   • Generate automated alerts
+
+4. Further Analysis:
+   • Gait variability (cycle-to-cycle changes)
+   • Asymmetry indices (left/right differences)
+   • Machine learning for classification (healthy vs pathological)
+
+═════════════════════════════════════════════════════════════════════
